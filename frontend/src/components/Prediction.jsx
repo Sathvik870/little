@@ -1,7 +1,29 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import { Lightbulb, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
 
 const API_URL = "http://localhost:8000";
+
+const getResultStyle = (predictedClass) => {
+    switch (predictedClass) {
+        case 0: return {
+            classes: 'bg-green-100 text-green-800 border-green-300',
+            icon: <CheckCircle className="h-8 w-8 text-green-600" />
+        };
+        case 1: return {
+            classes: 'bg-yellow-100 text-yellow-800 border-yellow-300',
+            icon: <AlertTriangle className="h-8 w-8 text-yellow-600" />
+        };
+        case 2: return {
+            classes: 'bg-red-100 text-red-800 border-red-300',
+            icon: <XCircle className="h-8 w-8 text-red-600" />
+        };
+        default: return {
+            classes: 'bg-gray-100 text-gray-800 border-gray-300',
+            icon: null
+        };
+    }
+};
 
 function Prediction() {
     const [formData, setFormData] = useState({
@@ -9,9 +31,11 @@ function Prediction() {
     });
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
+
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: parseFloat(e.target.value) });
     };
+
     const handleSubmit = (e) => {
         e.preventDefault();
         setLoading(true);
@@ -21,10 +45,13 @@ function Prediction() {
             .catch(error => console.error("Error making prediction:", error))
             .finally(() => setLoading(false));
     };
+    
+    const resultStyle = result ? getResultStyle(result.model_prediction.predicted_class) : {};
+
     return (
         <div>
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Diabetes Risk Prediction</h1>
-            <p className="text-gray-600 mb-8">Fill in the details below to predict the risk of diabetes.</p>
+            <p className="text-gray-600 mb-8">Fill in the details to get an AI-powered risk assessment and personalized recommendations.</p>
 
             <div className="max-w-2xl mx-auto">
                 <div className="bg-white rounded-lg shadow-md p-8">
@@ -83,9 +110,38 @@ function Prediction() {
                     </form>
                 </div>
                 {result && (
-                    <div className={`mt-6 p-4 rounded-lg text-center ${result.prediction === 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                        <h3 className="font-bold text-lg">{result.prediction_label}</h3>
-                        <p>Model Confidence: {result.confidence_score}</p>
+                    <div className="mt-8 space-y-6">
+                        <div className={`p-6 rounded-lg border-l-4 ${resultStyle.classes}`}>
+                            <div className="flex items-center space-x-4">
+                                {resultStyle.icon}
+                                <div>
+                                    <p className="font-bold text-lg">Model Prediction: {result.model_prediction.risk_level}</p>
+                                    <p className="text-sm">Confidence: {result.model_prediction.confidence}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
+                            <div className="flex items-center space-x-3 mb-4">
+                                <Lightbulb className="h-6 w-6 text-blue-500" />
+                                <h3 className="font-bold text-lg text-gray-800">AI Health Insights</h3>
+                            </div>
+                            <div className="space-y-4 text-gray-700">
+                                <p>
+                                    <strong className="font-semibold">Assessment:</strong> {result.ai_recommendation.condition}
+                                </p>
+                                <p>
+                                    <strong className="font-semibold">Explanation:</strong> {result.ai_recommendation.explanation}
+                                </p>
+                                <div>
+                                    <strong className="font-semibold block mb-2">Recommendations:</strong>
+                                    <ul className="list-disc list-inside space-y-1 pl-2">
+                                        {result.ai_recommendation.recommendations.map((rec, index) => (
+                                            <li key={index}>{rec}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>

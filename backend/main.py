@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -19,6 +20,25 @@ app = FastAPI(
 origins = [
     "http://localhost:5173",
 ]
+
+FEATURES_FOR_RULES = ['BMI', 'Age', 'HighBP', 'HighChol', 'Smoker', 'PhysActivity']
+
+PREDIABETES_THRESHOLDS = {
+    'BMI': 30, 'Age': 9, 'HighBP': 1, 'HighChol': 1, 'Smoker': 1, 'PhysActivity': 0 
+}
+
+DIABETES_THRESHOLDS = {
+    'BMI': 31, 'Age': 10, 'HighBP': 1, 'HighChol': 1, 'Smoker': 1, 'PhysActivity': 0
+}
+
+RECOMMENDATIONS = {
+    'BMI': "Reduce body weight through a balanced diet and regular exercise.",
+    'Age': "Regular health screening and lifestyle monitoring is recommended, especially with advancing age.",
+    'HighBP': "Control blood pressure through medication, a low-salt diet, and exercise.",
+    'HighChol': "Reduce cholesterol intake, consider a diet rich in fiber, and consult a healthcare provider.",
+    'Smoker': "Quit smoking to significantly reduce diabetes-related complications and improve overall health.",
+    'PhysActivity': "Increase physical activity to at least 150 minutes of moderate-intensity exercise per week."
+}
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,9 +79,9 @@ def load_and_train_models():
     ml_models['scaler'] = scaler
 
     models_to_train = {
-        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
-        "Decision Tree": DecisionTreeClassifier(random_state=42),
-        "Random Forest": RandomForestClassifier(random_state=42)
+        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced'),
+        "Decision Tree": DecisionTreeClassifier(random_state=42, class_weight='balanced'),
+        "Random Forest": RandomForestClassifier(random_state=42, class_weight='balanced')
     }
     
     reports = {}
@@ -93,60 +113,119 @@ def get_model_performance():
 @app.get("/dashboard/analytics")
 def get_dashboard_analytics():
     """
-    Provides aggregated data from the full dataset for the dashboard.
+    Provides expanded aggregated data for the new dashboard layout.
     """
     data = ml_models.get('full_data')
     if data is None:
         return {"error": "Data not loaded yet."}
 
-    # 1. Diabetes distribution
+    males_df = data[data['Sex'] == 1]
+    total_males = len(males_df)
+    
+    male_smoker_perc = (males_df['Smoker'].value_counts(normalize=True).get(1, 0) * 100) if total_males > 0 else 0
+    male_alcohol_perc = (males_df['HvyAlcoholConsump'].value_counts(normalize=True).get(1, 0) * 100) if total_males > 0 else 0
+
+    total_people = len(data)
+    phys_activity_perc = (data['PhysActivity'].value_counts(normalize=True).get(1, 0) * 100) if total_people > 0 else 0
+    high_chol_perc = (data['HighChol'].value_counts(normalize=True).get(1, 0) * 100) if total_people > 0 else 0
+
+    kpi_stats = {
+        "phys_activity_percentage": round(phys_activity_perc, 2),
+        "high_chol_percentage": round(high_chol_perc, 2),
+        "male_smoker_percentage": round(male_smoker_perc, 2),
+        "male_alcohol_percentage": round(male_alcohol_perc, 2)
+    }
+
     diabetes_counts = data['Diabetes_012'].value_counts().sort_index()
     diabetes_distribution = {
         "labels": ["No Diabetes", "Pre-diabetes", "Diabetes"],
-        # FIX #2: Convert numpy.int64 to Python int
+        "values": [int(v) for v in diabetes_counts.reindex([0, 1, 2], fill_value=0)]
+    }
+
+    heatmap_features = ['Diabetes_012', 'BMI', 'Age', 'HighBP', 'HighChol', 'PhysActivity', 'GenHlth', 'MentHlth']
+    corr_matrix = data[heatmap_features].corr()
+    correlation_data = {"labels": corr_matrix.columns.tolist(), "data": corr_matrix.values.tolist()}
+    
+    gender_counts = data['Sex'].value_counts()
+    gender_bar_chart_data = {
+        "labels": ["Female", "Male"],
+        "values": [int(gender_counts.get(0, 0)), int(gender_counts.get(1, 0))]
+    }
+    
+    health_metrics_avg = {
+        "labels": ["General Health (1-5)", "Mental Health Days (0-30)", "Physical Health Days (0-30)"],
         "values": [
-            int(diabetes_counts.get(0, 0)),
-            int(diabetes_counts.get(1, 0)),
-            int(diabetes_counts.get(2, 0))
+            float(data['GenHlth'].mean()),
+            float(data['MentHlth'].mean()),
+            float(data['PhysHlth'].mean())
         ]
     }
 
-    # FIX #1: Use 'Diabetes_012' instead of 'Diabetes_Binary'
-    gen_health_diabetes = data.groupby('GenHlth')['Diabetes_012'].value_counts(normalize=True).unstack().fillna(0)
-    
-    # Check if all columns (0, 1, 2) exist after unstacking, add them if not
+    diabetes_by_age_df = data.groupby('Age')['Diabetes_012'].value_counts(normalize=True).unstack().fillna(0)
     for col in [0, 1, 2]:
-        if col not in gen_health_diabetes.columns:
-            gen_health_diabetes[col] = 0
-
-    gen_health_data = {
-        'labels': [f'Health Level {int(i)}' for i in gen_health_diabetes.index],
-        'no_diabetes_percentage': (gen_health_diabetes[0] * 100).tolist(),
-        'prediabetes_percentage': (gen_health_diabetes[1] * 100).tolist(),
-        'diabetes_percentage': (gen_health_diabetes[2] * 100).tolist()
+        if col not in diabetes_by_age_df.columns:
+            diabetes_by_age_df[col] = 0
+            
+    diabetes_by_age = {
+        "labels": [f"Age Cat {int(age)}" for age in diabetes_by_age_df.index],
+        "no_diabetes_perc": (diabetes_by_age_df[0] * 100).tolist(),
+        "prediabetes_perc": (diabetes_by_age_df[1] * 100).tolist(),
+        "diabetes_perc": (diabetes_by_age_df[2] * 100).tolist(),
     }
-    
-    # 3. Age distribution
-    age_distribution = data['Age'].value_counts().sort_index()
-    # FIX #2: Convert numpy.int64 values to Python int
-    age_data = {
-        "labels": [f'Age Cat {int(k)}' for k in age_distribution.keys()],
-        "values": [int(v) for v in age_distribution.values]
-    }
-    
-    # 4. BMI distribution
-    bmi_distribution = pd.cut(data['BMI'], bins=range(10, 71, 5)).value_counts().sort_index()
-    # FIX #2: Convert numpy.int64 values to Python int
-    bmi_data = {
-        'labels': [str(b) for b in bmi_distribution.index],
-        'counts': [int(v) for v in bmi_distribution.values]
-    }
-    
     return {
+        "kpi_stats": kpi_stats,
         "diabetes_distribution": diabetes_distribution,
-        "health_vs_diabetes": gen_health_data,
-        "age_distribution": age_data,
-        "bmi_distribution": bmi_data
+        "correlation_data": correlation_data,
+        "gender_bar_chart_data": gender_bar_chart_data,
+        "health_metrics_avg": health_metrics_avg,
+        "diabetes_by_age": diabetes_by_age
+    }
+
+def get_ai_recommendations(input_dict: dict):
+    prediabetes_hits = []
+    diabetes_hits = []
+
+    for feature in FEATURES_FOR_RULES:
+        is_prediabetes_risk = (
+            feature != 'PhysActivity' and input_dict[feature] >= PREDIABETES_THRESHOLDS[feature]
+        ) or (
+            feature == 'PhysActivity' and input_dict[feature] == PREDIABETES_THRESHOLDS[feature]
+        )
+        if is_prediabetes_risk:
+            prediabetes_hits.append(feature)
+
+        is_diabetes_risk = (
+            feature != 'PhysActivity' and input_dict[feature] >= DIABETES_THRESHOLDS[feature]
+        ) or (
+            feature == 'PhysActivity' and input_dict[feature] == DIABETES_THRESHOLDS[feature]
+        )
+        if is_diabetes_risk:
+            diabetes_hits.append(feature)
+
+    if len(diabetes_hits) >= 4:
+        condition = "High Concern (Diabetes Indicators)"
+        affected_features = diabetes_hits
+    elif len(prediabetes_hits) >= 3:
+        condition = "Medium Concern (Pre-diabetes Indicators)"
+        affected_features = prediabetes_hits
+    elif len(prediabetes_hits) > 0:
+        condition = "Low Concern (At Risk)"
+        affected_features = prediabetes_hits
+    else:
+        condition = "Healthy Profile"
+        affected_features = []
+
+    if affected_features:
+        explanation = "The following factors contributed to this assessment: " + ", ".join(affected_features) + "."
+        recommendation_list = [RECOMMENDATIONS[f] for f in affected_features]
+    else:
+        explanation = "Your inputs indicate a healthy profile according to our rule-based assessment."
+        recommendation_list = ["Continue to maintain your healthy lifestyle choices."]
+
+    return {
+        "condition": condition,
+        "explanation": explanation,
+        "recommendations": recommendation_list
     }
 
 @app.post("/predict")
@@ -158,19 +237,23 @@ def predict(input_data: PredictionInput):
     input_df = pd.DataFrame([input_data.dict()])
     input_scaled = scaler.transform(input_df)
     
-    prediction = model.predict(input_scaled)[0]
-    prediction_proba = model.predict_proba(input_scaled)
-    prediction_labels = {
-        0: "Low Risk: No Diabetes",
-        1: "Medium Risk: Pre-diabetes",
-        2: "High Risk: Diabetes"
+    probabilities = model.predict_proba(input_scaled)[0]
+    predicted_class = int(np.argmax(probabilities))
+    confidence = round(np.max(probabilities) * 100, 2)
+
+    risk_levels = {0: "Low Risk", 1: "Medium Risk (Pre-diabetes)", 2: "High Risk (Diabetes)"}
+    
+    model_prediction_result = {
+        "predicted_class": predicted_class,
+        "risk_level": risk_levels.get(predicted_class, "Unknown"),
+        "confidence": f"{confidence}%"
     }
     
+    ai_recommendation_result = get_ai_recommendations(input_data.dict())
     return {
-        "prediction": int(prediction),
-        "prediction_label": prediction_labels.get(prediction, "Unknown"),
-        "confidence_score": f"{prediction_proba[0][prediction]:.2%}"
+        "model_prediction": model_prediction_result,
+        "ai_recommendation": ai_recommendation_result
     }
-
+    
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
